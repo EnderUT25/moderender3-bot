@@ -4,6 +4,8 @@ import google.generativeai as genai
 from telegram import Update, ChatPermissions
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 from datetime import datetime, timedelta
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
 # ==================== НАСТРОЙКИ И БЕЗОПАСНОСТЬ ====================
 # Токены теперь подтягиваются из переменных окружения (Environment Variables)
@@ -240,13 +242,17 @@ async def pin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await is_moderator(update, context):
         return
     if update.message.reply_to_message:
-        await context.bot.pin_chat_message(
-            update.effective_chat.id,
-            update.message.reply_to_message.message_id
-        )
-        await update.message.reply_text("📌 Закреплено Модерэндером 3.0.")
+        try:
+            await context.bot.pin_chat_message(
+                update.effective_chat.id,
+                update.message.reply_to_message.message_id
+            )
+            # quote=False защищает от ошибки "Message to be replied not found"
+            await update.message.reply_text("📌 Закреплено Модерэндером 3.0.", quote=False)
+        except Exception as e:
+            await update.message.reply_text(f"❌ Ошибка закрепления: {e}", quote=False)
     else:
-        await update.message.reply_text("❌ Ответь на сообщение которое хочешь закрепить.")
+        await update.message.reply_text("❌ Ответь на сообщение которое хочешь закрепить.", quote=False)
 
 async def unpin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """/unpin — открепить все сообщения"""
@@ -344,7 +350,25 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ==================== ЗАПУСК ====================
 
+# --- Заглушка для Render Web Service ---
+class DummyHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header('Content-type', 'text/plain')
+        self.end_headers()
+        self.wfile.write(b"Moderender 3.0 is alive and polling!")
+
+def run_dummy_server():
+    # Render автоматически передает нужный порт через переменную окружения PORT
+    port = int(os.environ.get("PORT", 10000))
+    server = HTTPServer(("0.0.0.0", port), DummyHandler)
+    server.serve_forever()
+# ----------------------------------------
+
 if __name__ == "__main__":
+    # Запускаем фейковый веб-сервер в фоновом потоке, чтобы Render нас не убил
+    threading.Thread(target=run_dummy_server, daemon=True).start()
+
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     # Создатель
