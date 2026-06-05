@@ -5,9 +5,10 @@ from telegram import Update, ChatPermissions
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 from datetime import datetime, timedelta
 
-# ==================== НАСТРОЙКИ ====================
-BOT_TOKEN = "6783929725:AAGwXMTRMvsJQG1Lw1MT9J_iWwm5z2ZK8Os"
-GEMINI_KEY = "AQ.Ab8RN6K9MHvmBOfjr7T-1LIidvaSD1ZWi8qFxZ7VnzhzMOXtnw"
+# ==================== НАСТРОЙКИ И БЕЗОПАСНОСТЬ ====================
+# Токены теперь подтягиваются из переменных окружения (Environment Variables)
+BOT_TOKEN = os.getenv("BOT_TOKEN", "ТВОЙ_ТОКЕН_TELEGRAM")
+GEMINI_KEY = os.getenv("GEMINI_KEY", "ТВОЙ_ТОКЕН_GEMINI")
 
 # Файл где хранятся модераторы (сохраняется на диске)
 MODS_FILE = "moderators.json"
@@ -18,6 +19,7 @@ model = genai.GenerativeModel("gemini-1.5-flash")
 SYSTEM = """Ты — Модерэндер 3.0, умный и немного строгий помощник Telegram-чата.
 Отвечай кратко, по делу, на русском языке. Можешь иногда пошутить."""
 
+warns = {}
 
 # ==================== ХРАНЕНИЕ МОДЕРАТОРОВ ====================
 
@@ -26,7 +28,7 @@ def load_mods():
     if os.path.exists(MODS_FILE):
         with open(MODS_FILE, "r") as f:
             return json.load(f)
-    return {}  # {chat_id: [user_id, user_id, ...]}
+    return {}
 
 def save_mods(mods):
     """Сохраняем список модераторов в файл"""
@@ -34,7 +36,6 @@ def save_mods(mods):
         json.dump(mods, f)
 
 moderators = load_mods()
-
 
 # ==================== ПРОВЕРКА ПРАВ ====================
 
@@ -53,47 +54,40 @@ async def is_moderator(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bo
     chat_id = str(update.effective_chat.id)
     user_id = update.effective_user.id
 
-    # Создатель всегда может всё
     member = await context.bot.get_chat_member(
         update.effective_chat.id, user_id
     )
     if member.status == "creator":
         return True
 
-    # Проверяем список модераторов бота
     if chat_id in moderators and user_id in moderators[chat_id]:
         return True
 
     await update.message.reply_text(
         "❌ У тебя нет прав модератора.\n"
-        "Попроси создателя чата выдать их командой /addmod @username"
+        "Попроси создателя чата выдать их ответом на твое сообщение командой /addmod"
     )
     return False
 
 async def get_target(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Получаем цель команды — по ответу или по @username"""
+    """
+    Получаем цель команды. 
+    Ограничение Telegram API: поиск по @username невозможен без базы данных.
+    Поэтому используем ТОЛЬКО ответ (Reply) на сообщение пользователя.
+    """
     if update.message.reply_to_message:
         return update.message.reply_to_message.from_user
-    if context.args:
-        username = context.args[0].replace("@", "")
-        try:
-            member = await context.bot.get_chat_member(
-                update.effective_chat.id, f"@{username}"
-            )
-            return member.user
-        except:
-            await update.message.reply_text("❌ Пользователь не найден")
-    else:
-        await update.message.reply_text(
-            "❌ Укажи @username или ответь на сообщение пользователя"
-        )
+    
+    await update.message.reply_text(
+        "❌ Команда не сработала. Тебе нужно **ответить (Reply)** на сообщение пользователя, к которому ты хочешь применить команду.",
+        parse_mode="Markdown"
+    )
     return None
 
-
-# ==================== УПРАВЛЕНИЕ МОДЕРАТОРАМИ (только создатель) ====================
+# ==================== УПРАВЛЕНИЕ МОДЕРАТОРАМИ ====================
 
 async def addmod(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """/addmod @username — выдать статус модератора"""
+    """/addmod — выдать статус модератора (через Reply)"""
     if not await is_creator(update, context):
         return
     user = await get_target(update, context)
@@ -116,7 +110,7 @@ async def addmod(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def removemod(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """/removemod @username — снять статус модератора"""
+    """/removemod — снять статус модератора (через Reply)"""
     if not await is_creator(update, context):
         return
     user = await get_target(update, context)
@@ -139,7 +133,7 @@ async def modlist(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     chat_id = str(update.effective_chat.id)
     if chat_id not in moderators or not moderators[chat_id]:
-        await update.message.reply_text("📋 Модераторов пока нет. Назначь через /addmod @username")
+        await update.message.reply_text("📋 Модераторов пока нет. Назначь ответив на сообщение через /addmod")
         return
 
     lines = ["📋 *Модераторы Модерэндера 3.0:*\n"]
@@ -154,22 +148,19 @@ async def modlist(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
 
-
 # ==================== КОМАНДЫ МОДЕРАЦИИ ====================
 
 async def ban(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """/ban @username — бан навсегда"""
+    """/ban — бан навсегда (через Reply)"""
     if not await is_moderator(update, context):
         return
     user = await get_target(update, context)
     if user:
         await context.bot.ban_chat_member(update.effective_chat.id, user.id)
-        await update.message.reply_text(
-            f"🔨 Модерэндер 3.0 заблокировал {user.first_name} навсегда."
-        )
+        await update.message.reply_text(f"🔨 Модерэндер 3.0 заблокировал {user.first_name} навсегда.")
 
 async def kick(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """/kick @username — кик (может вернуться)"""
+    """/kick — кик (через Reply)"""
     if not await is_moderator(update, context):
         return
     user = await get_target(update, context)
@@ -179,14 +170,14 @@ async def kick(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"👢 {user.first_name} кикнут. Может вернуться по ссылке.")
 
 async def mute(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """/mute @username [минуты] — мут (по умолч. 60 мин)"""
+    """/mute [минуты] — мут (через Reply, по умолч. 60 мин)"""
     if not await is_moderator(update, context):
         return
     user = await get_target(update, context)
     minutes = 60
-    if context.args and len(context.args) > 1:
+    if context.args and len(context.args) > 0:
         try:
-            minutes = int(context.args[1])
+            minutes = int(context.args[0])
         except:
             pass
     if user:
@@ -199,7 +190,7 @@ async def mute(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"🔇 {user.first_name} замьючен на {minutes} мин.")
 
 async def unmute(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """/unmute @username — снять мут"""
+    """/unmute — снять мут (через Reply)"""
     if not await is_moderator(update, context):
         return
     user = await get_target(update, context)
@@ -215,10 +206,8 @@ async def unmute(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         await update.message.reply_text(f"🔊 {user.first_name} снова может писать.")
 
-warns = {}
-
 async def warn(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """/warn @username — предупреждение (3 = бан)"""
+    """/warn — предупреждение (через Reply, 3 = бан)"""
     if not await is_moderator(update, context):
         return
     user = await get_target(update, context)
@@ -233,12 +222,10 @@ async def warn(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             warns[uid] = 0
         else:
-            await update.message.reply_text(
-                f"⚠️ Предупреждение {count}/3 для {user.first_name}."
-            )
+            await update.message.reply_text(f"⚠️ Предупреждение {count}/3 для {user.first_name}.")
 
 async def unwarn(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """/unwarn @username — снять предупреждение"""
+    """/unwarn — снять предупреждение (через Reply)"""
     if not await is_moderator(update, context):
         return
     user = await get_target(update, context)
@@ -293,82 +280,94 @@ async def rw(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text("🔓 Чат снова открыт для всех.")
 
-
 # ==================== ИИ ====================
 
 async def ai_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_text = update.message.text
+    """Обработчик ИИ: реагирует только на тег бота или ответ на его сообщение"""
+    bot = context.bot
+    # Проверяем, есть ли упоминание юзернейма бота в тексте
+    is_mentioned = update.message.text and f"@{bot.username}" in update.message.text
+    # Проверяем, является ли сообщение ответом на сообщение бота
+    is_reply_to_bot = update.message.reply_to_message and update.message.reply_to_message.from_user.id == bot.id
+
+    if not (is_mentioned or is_reply_to_bot):
+        return
+
+    # Убираем юзернейм бота из текста, чтобы ИИ отвечал по существу
+    user_text = update.message.text.replace(f"@{bot.username}", "").strip()
+    
+    if not user_text and is_reply_to_bot:
+        user_text = "Прокомментируй это."
+
     try:
         response = model.generate_content(f"{SYSTEM}\n\nПользователь: {user_text}")
         await update.message.reply_text(response.text)
-    except Exception:
+    except Exception as e:
+        print(f"Ошибка ИИ: {e}")
         await update.message.reply_text("⚙️ Модерэндер временно думает... попробуй позже.")
-
 
 # ==================== СТАРТ И ПОМОЩЬ ====================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👋 Привет! Я *Модерэндер 3.0*\n\n"
-        "🔑 *Создатель чата* может назначать модераторов через /addmod\n"
+        "🔑 *Создатель чата* может назначать модераторов через /addmod (в ответ на сообщение)\n"
         "👮 *Модераторы* могут банить, мутить и управлять чатом\n"
-        "💬 *Все остальные* могут общаться со мной как с ИИ\n\n"
+        "💬 *Все остальные* могут общаться со мной как с ИИ, упомянув меня через @ или ответив на мое сообщение\n\n"
         "Напиши /help для списка команд.",
         parse_mode="Markdown"
     )
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
-        "🤖 *Модерэндер 3.0 — Команды:*\n\n"
-
+        "🤖 *Модерэндер 3.0 — Команды:*\n"
+        "*(Все команды работают ТОЛЬКО через ответ/Reply на сообщение пользователя)*\n\n"
         "👑 *Только создатель чата:*\n"
-        "/addmod @user — назначить модератора\n"
-        "/removemod @user — снять модератора\n"
-        "/modlist — список модераторов\n\n"
-
+        "/addmod — назначить модератора\n"
+        "/removemod — снять модератора\n"
+        "/modlist — список модераторов (без Reply)\n\n"
         "👮 *Модераторы и создатель:*\n"
-        "/ban @user — бан навсегда\n"
-        "/kick @user — кик (может вернуться)\n"
-        "/mute @user [мин] — мут (по умолч. 60 мин)\n"
-        "/unmute @user — снять мут\n"
-        "/warn @user — предупреждение (3 = бан)\n"
-        "/unwarn @user — снять предупреждение\n"
-        "/pin — закрепить (ответь на сообщение)\n"
-        "/unpin — открепить все\n"
-        "/ro — чат только чтение\n"
-        "/rw — открыть чат\n\n"
-
+        "/ban — бан навсегда\n"
+        "/kick — кик (может вернуться)\n"
+        "/mute [мин] — мут (по умолч. 60 мин)\n"
+        "/unmute — снять мут\n"
+        "/warn — предупреждение (3 = бан)\n"
+        "/unwarn — снять предупреждение\n"
+        "/pin — закрепить сообщение\n"
+        "/unpin — открепить все (без Reply)\n"
+        "/ro — чат только чтение (без Reply)\n"
+        "/rw — открыть чат (без Reply)\n\n"
         "💬 *Для всех:*\n"
-        "Просто напиши сообщение — Модерэндер ответит как ИИ!"
+        "Упомяни меня или ответь на мое сообщение, и я отвечу как ИИ!"
     )
     await update.message.reply_text(text, parse_mode="Markdown")
 
-
 # ==================== ЗАПУСК ====================
 
-app = ApplicationBuilder().token(BOT_TOKEN).build()
+if __name__ == "__main__":
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-# Создатель
-app.add_handler(CommandHandler("addmod", addmod))
-app.add_handler(CommandHandler("removemod", removemod))
-app.add_handler(CommandHandler("modlist", modlist))
+    # Создатель
+    app.add_handler(CommandHandler("addmod", addmod))
+    app.add_handler(CommandHandler("removemod", removemod))
+    app.add_handler(CommandHandler("modlist", modlist))
 
-# Модерация
-app.add_handler(CommandHandler("ban", ban))
-app.add_handler(CommandHandler("kick", kick))
-app.add_handler(CommandHandler("mute", mute))
-app.add_handler(CommandHandler("unmute", unmute))
-app.add_handler(CommandHandler("warn", warn))
-app.add_handler(CommandHandler("unwarn", unwarn))
-app.add_handler(CommandHandler("pin", pin))
-app.add_handler(CommandHandler("unpin", unpin))
-app.add_handler(CommandHandler("ro", ro))
-app.add_handler(CommandHandler("rw", rw))
+    # Модерация
+    app.add_handler(CommandHandler("ban", ban))
+    app.add_handler(CommandHandler("kick", kick))
+    app.add_handler(CommandHandler("mute", mute))
+    app.add_handler(CommandHandler("unmute", unmute))
+    app.add_handler(CommandHandler("warn", warn))
+    app.add_handler(CommandHandler("unwarn", unwarn))
+    app.add_handler(CommandHandler("pin", pin))
+    app.add_handler(CommandHandler("unpin", unpin))
+    app.add_handler(CommandHandler("ro", ro))
+    app.add_handler(CommandHandler("rw", rw))
 
-# Общее
-app.add_handler(CommandHandler("start", start))
-app.add_handler(CommandHandler("help", help_cmd))
-app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, ai_reply))
+    # Общее
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("help", help_cmd))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, ai_reply))
 
-print("✅ Модерэндер 3.0 запущен!")
-app.run_polling()
+    print("✅ Модерэндер 3.0 готов к запуску!")
+    app.run_polling()
