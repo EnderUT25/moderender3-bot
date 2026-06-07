@@ -4,7 +4,7 @@ import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from datetime import datetime, timedelta
 
-import google.generativeai as genai
+from google import genai
 from telegram import Update, ChatPermissions
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
@@ -14,8 +14,7 @@ GEMINI_KEY = os.getenv("GEMINI_KEY", "")
 
 MODS_FILE = "moderators.json"
 
-genai.configure(api_key=GEMINI_KEY)
-model = genai.GenerativeModel("gemini-1.5-flash")
+ai_client = genai.Client(api_key=GEMINI_KEY)
 
 SYSTEM = """Ты — Модерэндер 3.0, умный и немного строгий помощник Telegram-чата.
 Отвечай кратко, по делу, на русском языке. Можешь иногда пошутить."""
@@ -91,9 +90,7 @@ async def addmod(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     moderators[chat_id].append(user.id)
     save_mods(moderators)
-    await update.message.reply_text(
-        f"✅ {user.first_name} назначен модератором Модерэндера 3.0."
-    )
+    await update.message.reply_text(f"✅ {user.first_name} назначен модератором Модерэндера 3.0.")
 
 async def removemod(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await is_creator(update, context):
@@ -280,7 +277,10 @@ async def ai_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_text = "Прокомментируй это."
 
     try:
-        response = model.generate_content(f"{SYSTEM}\n\nПользователь: {user_text}")
+        response = ai_client.models.generate_content(
+            model="gemini-2.0-flash",
+            contents=f"{SYSTEM}\n\nПользователь: {user_text}"
+        )
         await update.message.reply_text(response.text)
     except Exception as e:
         print(f"Ошибка ИИ: {e}")
@@ -334,7 +334,7 @@ class DummyHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def log_message(self, format, *args):
-        pass  # Отключаем спам в логах
+        pass
 
 def run_dummy_server():
     port = int(os.environ.get("PORT", 10000))
@@ -345,7 +345,7 @@ def run_dummy_server():
 
 if __name__ == "__main__":
     threading.Thread(target=run_dummy_server, daemon=True).start()
-    print("🌐 HTTP-сервер запущен (для Render)")
+    print("🌐 HTTP-сервер запущен")
 
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
