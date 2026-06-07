@@ -1,11 +1,13 @@
 import json
 import os
 import threading
+import random
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from datetime import datetime, timedelta
+from collections import deque
 
 from google import genai
-from telegram import Update, ChatPermissions
+from telegram import Update, ChatPermissions, ReactionTypeEmoji
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
 # ==================== НАСТРОЙКИ ====================
@@ -17,9 +19,75 @@ MODS_FILE = "moderators.json"
 ai_client = genai.Client(api_key=GEMINI_KEY)
 
 SYSTEM = """Ты — Модерэндер 3.0, умный и немного строгий помощник Telegram-чата.
-Отвечай кратко, по делу, на русском языке. Можешь иногда пошутить."""
+Отвечай кратко, по делу, на русском языке, можешь шутить. Ты прикольный такой, душа компании, шаришь за интернет мемы. Ты админ Эндер Крутого чата, твой создатель @EnderUT25 или Эндер или Тимур Чубов это всё он
+Ты помнишь историю переписки и учитываешь контекст при ответе."""
 
 warns = {}
+
+# ==================== ИСТОРИЯ ЧАТА ====================
+# Храним историю для каждого чата: последние 50 сообщений за последние 2 часа
+HISTORY_LIMIT = 50       # максимум сообщений
+HISTORY_TTL = 120        # минут (2 часа)
+
+chat_history = {}  # {chat_id: deque([(datetime, username, text), ...])}
+
+def add_to_history(chat_id: int, username: str, text: str):
+    cid = str(chat_id)
+    if cid not in chat_history:
+        chat_history[cid] = deque(maxlen=HISTORY_LIMIT)
+
+    # Чистим старые сообщения
+    cutoff = datetime.now() - timedelta(minutes=HISTORY_TTL)
+    while chat_history[cid] and chat_history[cid][0][0] < cutoff:
+        chat_history[cid].popleft()
+
+    chat_history[cid].append((datetime.now(), username, text))
+
+def get_history_text(chat_id: int) -> str:
+    cid = str(chat_id)
+    if cid not in chat_history or not chat_history[cid]:
+        return ""
+
+    cutoff = datetime.now() - timedelta(minutes=HISTORY_TTL)
+    lines = []
+    for ts, uname, text in chat_history[cid]:
+        if ts >= cutoff:
+            lines.append(f"{uname}: {text}")
+
+    if not lines:
+        return ""
+
+    return "История чата за последние 2 часа:\n" + "\n".join(lines) + "\n\n"
+
+# ==================== РЕАКЦИИ ====================
+# Все реакции которые поддерживает Telegram
+REACTIONS = [
+    "👍", "👎", "❤️", "🔥", "🥰", "👏", "😁", "🤔",
+    "🤯", "😱", "🤬", "😢", "🎉", "🤩", "🤮", "💩",
+    "🙏", "👌", "🕊", "🤡", "🥱", "🥴", "😍", "🐳",
+    "❤️‍🔥", "🌚", "🌭", "💯", "🤣", "⚡", "🍌", "🏆",
+    "💔", "🤨", "😐", "🍓", "🍾", "💋", "🖕", "😈",
+    "😴", "😭", "🤓", "👻", "👨‍💻", "👀", "🎃", "🙈",
+    "😇", "😨", "🤝", "✍️", "🤗", "🫡", "🎅", "🎄",
+    "☃️", "💅", "🤪", "🗿", "🆒", "💘", "🙉", "🦄",
+]
+
+# Шанс поставить реакцию (1 = 100%, 0.3 = 30%)
+REACTION_CHANCE = 0.3
+
+async def maybe_react(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Случайно ставит реакцию на сообщение"""
+    if random.random() > REACTION_CHANCE:
+        return
+    try:
+        emoji = random.choice(REACTIONS)
+        await context.bot.set_message_reaction(
+            chat_id=update.effective_chat.id,
+            message_id=update.message.message_id,
+            reaction=[ReactionTypeEmoji(emoji=emoji)]
+        )
+    except Exception:
+        pass  # Молча игнорируем если реакция не поддерживается
 
 # ==================== ХРАНЕНИЕ МОДЕРАТОРОВ ====================
 
@@ -117,7 +185,7 @@ async def modlist(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("📋 Модераторов пока нет. Ответь на чьё-то сообщение командой /addmod")
         return
 
-    lines = ["📋 *Модераторы Модерэндера 3.0:*\n"]
+    lines = ["📋 *Модераторы Эндер Крутого Чата:*\n"]
     for uid in moderators[chat_id]:
         try:
             member = await context.bot.get_chat_member(update.effective_chat.id, uid)
@@ -255,14 +323,23 @@ async def rw(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text("🔓 Чат снова открыт для всех.")
 
-# ==================== ИИ ====================
+# ==================== ИИ + ИСТОРИЯ + РЕАКЦИИ ====================
 
-async def ai_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text:
         return
 
-    bot = context.bot
+    username = update.effective_user.first_name or "Пользователь"
     text = update.message.text
+
+    # Сохраняем каждое сообщение в историю
+    add_to_history(update.effective_chat.id, username, text)
+
+    # Ставим случайную реакцию на любое сообщение
+    await maybe_react(update, context)
+
+    # Отвечаем только если упомянули бота или ответили на его сообщение
+    bot = context.bot
     is_mentioned = f"@{bot.username}" in text
     is_reply_to_bot = (
         update.message.reply_to_message is not None and
@@ -276,12 +353,19 @@ async def ai_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not user_text:
         user_text = "Прокомментируй это."
 
+    # Формируем запрос с историей
+    history = get_history_text(update.effective_chat.id)
+    prompt = f"{SYSTEM}\n\n{history}Пользователь {username}: {user_text}"
+
     try:
         response = ai_client.models.generate_content(
             model="gemini-2.5-flash",
-            contents=f"{SYSTEM}\n\nПользователь: {user_text}"
+            contents=prompt
         )
-        await update.message.reply_text(response.text)
+        reply = response.text
+        # Сохраняем ответ бота в историю
+        add_to_history(update.effective_chat.id, "Модерэндер 3.0", reply)
+        await update.message.reply_text(reply)
     except Exception as e:
         print(f"Ошибка ИИ: {e}")
         await update.message.reply_text("⚙️ Модерэндер временно думает... попробуй позже.")
@@ -293,7 +377,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "👋 Привет! Я *Модерэндер 3.0*\n\n"
         "👑 Создатель чата назначает модераторов через /addmod\n"
         "👮 Модераторы управляют чатом\n"
-        "💬 Упомяни меня @бот или ответь на моё сообщение — отвечу как ИИ\n\n"
+        "💬 Упомяни меня @бот или ответь на моё сообщение — отвечу как ИИ\n"
+        "😄 Иногда ставлю реакции на сообщения\n"
+        "🧠 Помню историю чата за последние 2 часа\n\n"
         "/help — список команд",
         parse_mode="Markdown"
     )
@@ -317,7 +403,9 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/ro — чат только чтение\n"
         "/rw — открыть чат\n\n"
         "💬 *ИИ:*\n"
-        "Упомяни @бот или ответь на моё сообщение"
+        "Упомяни @бот или ответь на моё сообщение\n"
+        "🧠 Помню историю чата за 2 часа\n"
+        "😄 Ставлю реакции на сообщения (30% шанс)"
     )
     await update.message.reply_text(text, parse_mode="Markdown")
 
@@ -364,7 +452,7 @@ if __name__ == "__main__":
     app.add_handler(CommandHandler("rw", rw))
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_cmd))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, ai_reply))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     print("✅ Модерэндер 3.0 успешно запущен!")
     app.run_polling()
