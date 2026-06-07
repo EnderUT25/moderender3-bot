@@ -1,20 +1,21 @@
 import json
 import os
-from google import genai
-from telegram import Update, ChatPermissions
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
-from datetime import datetime, timedelta
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from datetime import datetime, timedelta
 
-# ==================== НАСТРОЙКИ И БЕЗОПАСНОСТЬ ====================
-BOT_TOKEN = os.getenv("BOT_TOKEN", "ТВОЙ_ТОКЕН_TELEGRAM")
-GEMINI_KEY = os.getenv("GEMINI_KEY", "ТВОЙ_ТОКЕН_GEMINI")
+import google.generativeai as genai
+from telegram import Update, ChatPermissions
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
+
+# ==================== НАСТРОЙКИ ====================
+BOT_TOKEN = os.getenv("BOT_TOKEN", "")
+GEMINI_KEY = os.getenv("GEMINI_KEY", "")
 
 MODS_FILE = "moderators.json"
 
-# Инициализируем новый официальный клиент Gemini
-ai_client = genai.Client(api_key=GEMINI_KEY)
+genai.configure(api_key=GEMINI_KEY)
+model = genai.GenerativeModel("gemini-1.5-flash")
 
 SYSTEM = """Ты — Модерэндер 3.0, умный и немного строгий помощник Telegram-чата.
 Отвечай кратко, по делу, на русском языке. Можешь иногда пошутить."""
@@ -42,7 +43,7 @@ async def is_creator(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool
         update.effective_chat.id, update.effective_user.id
     )
     if member.status != "creator":
-        await update.message.reply_text("❌ Только создатель чата может это делать.", quote=False)
+        await update.message.reply_text("❌ Только создатель чата может это делать.")
         return False
     return True
 
@@ -59,19 +60,15 @@ async def is_moderator(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bo
 
     await update.message.reply_text(
         "❌ У тебя нет прав модератора.\n"
-        "Попроси создателя чата выдать их ответом на твое сообщение командой /addmod",
-        quote=False
+        "Попроси создателя чата выдать права — он должен ответить на твоё сообщение командой /addmod"
     )
     return False
 
 async def get_target(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.reply_to_message:
         return update.message.reply_to_message.from_user
-    
     await update.message.reply_text(
-        "❌ Команда не сработала. Тебе нужно **ответить (Reply)** на сообщение пользователя, к которому ты хочешь применить команду.",
-        parse_mode="Markdown",
-        quote=False
+        "❌ Ответь (Reply) на сообщение пользователя, затем введи команду."
     )
     return None
 
@@ -89,14 +86,13 @@ async def addmod(update: Update, context: ContextTypes.DEFAULT_TYPE):
         moderators[chat_id] = []
 
     if user.id in moderators[chat_id]:
-        await update.message.reply_text(f"ℹ️ {user.first_name} уже является модератором.", quote=False)
+        await update.message.reply_text(f"ℹ️ {user.first_name} уже является модератором.")
         return
 
     moderators[chat_id].append(user.id)
     save_mods(moderators)
     await update.message.reply_text(
-        f"✅ {user.first_name} назначен модератором Модерэндера 3.0.\nТеперь он может использовать команды модерации.",
-        quote=False
+        f"✅ {user.first_name} назначен модератором Модерэндера 3.0."
     )
 
 async def removemod(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -108,12 +104,12 @@ async def removemod(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     chat_id = str(update.effective_chat.id)
     if chat_id not in moderators or user.id not in moderators[chat_id]:
-        await update.message.reply_text(f"ℹ️ {user.first_name} не является модератором.", quote=False)
+        await update.message.reply_text(f"ℹ️ {user.first_name} не является модератором.")
         return
 
     moderators[chat_id].remove(user.id)
     save_mods(moderators)
-    await update.message.reply_text(f"🗑 Статус модератора снят с {user.first_name}.", quote=False)
+    await update.message.reply_text(f"🗑 Статус модератора снят с {user.first_name}.")
 
 async def modlist(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await is_creator(update, context):
@@ -121,7 +117,7 @@ async def modlist(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     chat_id = str(update.effective_chat.id)
     if chat_id not in moderators or not moderators[chat_id]:
-        await update.message.reply_text("📋 Модераторов пока нет. Назначь ответив на сообщение через /addmod", quote=False)
+        await update.message.reply_text("📋 Модераторов пока нет. Ответь на чьё-то сообщение командой /addmod")
         return
 
     lines = ["📋 *Модераторы Модерэндера 3.0:*\n"]
@@ -134,7 +130,7 @@ async def modlist(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except:
             lines.append(f"• ID: {uid} (покинул чат)")
 
-    await update.message.reply_text("\n".join(lines), parse_mode="Markdown", quote=False)
+    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
 
 # ==================== КОМАНДЫ МОДЕРАЦИИ ====================
 
@@ -144,7 +140,7 @@ async def ban(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = await get_target(update, context)
     if user:
         await context.bot.ban_chat_member(update.effective_chat.id, user.id)
-        await update.message.reply_text(f"🔨 Модерэндер 3.0 заблокировал {user.first_name} навсегда.", quote=False)
+        await update.message.reply_text(f"🔨 {user.first_name} заблокирован навсегда.")
 
 async def kick(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await is_moderator(update, context):
@@ -153,14 +149,14 @@ async def kick(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user:
         await context.bot.ban_chat_member(update.effective_chat.id, user.id)
         await context.bot.unban_chat_member(update.effective_chat.id, user.id)
-        await update.message.reply_text(f"👢 {user.first_name} кикнут. Может вернуться по ссылке.", quote=False)
+        await update.message.reply_text(f"👢 {user.first_name} кикнут. Может вернуться.")
 
 async def mute(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await is_moderator(update, context):
         return
     user = await get_target(update, context)
     minutes = 60
-    if context.args and len(context.args) > 0:
+    if context.args:
         try:
             minutes = int(context.args[0])
         except:
@@ -172,25 +168,26 @@ async def mute(update: Update, context: ContextTypes.DEFAULT_TYPE):
             permissions=ChatPermissions(can_send_messages=False),
             until_date=until
         )
-        await update.message.reply_text(f"🔇 {user.first_name} замьючен на {minutes} мин.", quote=False)
+        await update.message.reply_text(f"🔇 {user.first_name} замьючен на {minutes} мин.")
 
 async def unmute(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """/unmute — снять мут (через Reply)"""
     if not await is_moderator(update, context):
         return
     user = await get_target(update, context)
     if user:
         try:
-            # Передаем пустой объект ChatPermissions(). 
-            # Telegram автоматически сбросит персональный мут до стандартных настроек группы.
             await context.bot.restrict_chat_member(
-                chat_id=update.effective_chat.id,
-                user_id=user.id,
-                permissions=ChatPermissions()
+                update.effective_chat.id, user.id,
+                permissions=ChatPermissions(
+                    can_send_messages=True,
+                    can_send_media_messages=True,
+                    can_send_other_messages=True,
+                    can_add_web_page_previews=True
+                )
             )
-            await update.message.reply_text(f"🔊 {user.first_name} снова может писать.", quote=False)
+            await update.message.reply_text(f"🔊 {user.first_name} снова может писать.")
         except Exception as e:
-            await update.message.reply_text(f"❌ Не удалось снять мут: {e}", quote=False)
+            await update.message.reply_text(f"❌ Ошибка: {e}")
 
 async def warn(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await is_moderator(update, context):
@@ -202,10 +199,10 @@ async def warn(update: Update, context: ContextTypes.DEFAULT_TYPE):
         count = warns[uid]
         if count >= 3:
             await context.bot.ban_chat_member(update.effective_chat.id, uid)
-            await update.message.reply_text(f"🔨 {user.first_name} получил 3-е предупреждение и заблокирован.", quote=False)
+            await update.message.reply_text(f"🔨 {user.first_name} получил 3 предупреждения и заблокирован.")
             warns[uid] = 0
         else:
-            await update.message.reply_text(f"⚠️ Предупреждение {count}/3 для {user.first_name}.", quote=False)
+            await update.message.reply_text(f"⚠️ Предупреждение {count}/3 для {user.first_name}.")
 
 async def unwarn(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await is_moderator(update, context):
@@ -213,7 +210,9 @@ async def unwarn(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = await get_target(update, context)
     if user:
         warns[user.id] = max(0, warns.get(user.id, 0) - 1)
-        await update.message.reply_text(f"✅ Предупреждение снято с {user.first_name}. Сейчас: {warns[user.id]}/3", quote=False)
+        await update.message.reply_text(
+            f"✅ Предупреждение снято с {user.first_name}. Сейчас: {warns[user.id]}/3"
+        )
 
 async def pin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await is_moderator(update, context):
@@ -224,23 +223,26 @@ async def pin(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 update.effective_chat.id,
                 update.message.reply_to_message.message_id
             )
-            await update.message.reply_text("📌 Закреплено Модерэндером 3.0.", quote=False)
+            await update.message.reply_text("📌 Закреплено.")
         except Exception as e:
-            await update.message.reply_text(f"❌ Ошибка закрепления: {e}", quote=False)
+            await update.message.reply_text(f"❌ Ошибка: {e}")
     else:
-        await update.message.reply_text("❌ Ответь на сообщение которое хочешь закрепить.", quote=False)
+        await update.message.reply_text("❌ Ответь на сообщение которое хочешь закрепить.")
 
 async def unpin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await is_moderator(update, context):
         return
     await context.bot.unpin_all_chat_messages(update.effective_chat.id)
-    await update.message.reply_text("📌 Все закреплённые сообщения откреплены.", quote=False)
+    await update.message.reply_text("📌 Все закреплённые сообщения откреплены.")
 
 async def ro(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await is_moderator(update, context):
         return
-    await context.bot.set_chat_permissions(update.effective_chat.id, ChatPermissions(can_send_messages=False))
-    await update.message.reply_text("🔒 Чат переведён в режим только чтения.", quote=False)
+    await context.bot.set_chat_permissions(
+        update.effective_chat.id,
+        ChatPermissions(can_send_messages=False)
+    )
+    await update.message.reply_text("🔒 Чат переведён в режим только чтения.")
 
 async def rw(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await is_moderator(update, context):
@@ -254,72 +256,96 @@ async def rw(update: Update, context: ContextTypes.DEFAULT_TYPE):
             can_add_web_page_previews=True
         )
     )
-    await update.message.reply_text("🔓 Чат снова открыт для всех.", quote=False)
+    await update.message.reply_text("🔓 Чат снова открыт для всех.")
 
-# ==================== ИИ (ОБНОВЛЕННЫЙ ДВИЖОК) ====================
+# ==================== ИИ ====================
 
 async def ai_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message or not update.message.text:
+        return
+
     bot = context.bot
-    is_mentioned = update.message.text and f"@{bot.username}" in update.message.text
-    is_reply_to_bot = update.message.reply_to_message and update.message.reply_to_message.from_user.id == bot.id
+    text = update.message.text
+    is_mentioned = f"@{bot.username}" in text
+    is_reply_to_bot = (
+        update.message.reply_to_message is not None and
+        update.message.reply_to_message.from_user.id == bot.id
+    )
 
     if not (is_mentioned or is_reply_to_bot):
         return
 
-    user_text = update.message.text.replace(f"@{bot.username}", "").strip()
-    if not user_text and is_reply_to_bot:
+    user_text = text.replace(f"@{bot.username}", "").strip()
+    if not user_text:
         user_text = "Прокомментируй это."
 
     try:
-        # Новый синтаксис официальной библиотеки Google 2026 года
-        response = ai_client.models.generate_content(
-            model='gemini-1.5-flash',
-            contents=f"{SYSTEM}\n\nПользователь: {user_text}"
-        )
-        await update.message.reply_text(response.text, quote=False)
+        response = model.generate_content(f"{SYSTEM}\n\nПользователь: {user_text}")
+        await update.message.reply_text(response.text)
     except Exception as e:
         print(f"Ошибка ИИ: {e}")
-        await update.message.reply_text("⚙️ Модерэндер временно думает... попробуй позже.", quote=False)
+        await update.message.reply_text("⚙️ Модерэндер временно думает... попробуй позже.")
 
 # ==================== СТАРТ И ПОМОЩЬ ====================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "👋 Привет! Я *Модерэндер 3.0*\n\nНапиши /help для списка команд.",
-        parse_mode="Markdown",
-        quote=False
+        "👋 Привет! Я *Модерэндер 3.0*\n\n"
+        "👑 Создатель чата назначает модераторов через /addmod\n"
+        "👮 Модераторы управляют чатом\n"
+        "💬 Упомяни меня @бот или ответь на моё сообщение — отвечу как ИИ\n\n"
+        "/help — список команд",
+        parse_mode="Markdown"
     )
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
         "🤖 *Модерэндер 3.0 — Команды:*\n\n"
-        "👑 *Только создатель чата:*\n/addmod | /removemod | /modlist\n\n"
-        "👮 *Модераторы:*\n/ban | /kick | /mute | /unmute | /warn | /unwarn | /pin | /unpin | /ro | /rw"
+        "👑 *Только создатель чата:*\n"
+        "/addmod — назначить модератора (Reply)\n"
+        "/removemod — снять модератора (Reply)\n"
+        "/modlist — список модераторов\n\n"
+        "👮 *Модераторы и создатель:*\n"
+        "/ban — бан навсегда (Reply)\n"
+        "/kick — кик (Reply)\n"
+        "/mute [мин] — мут, по умолч. 60 мин (Reply)\n"
+        "/unmute — снять мут (Reply)\n"
+        "/warn — предупреждение, 3 = бан (Reply)\n"
+        "/unwarn — снять предупреждение (Reply)\n"
+        "/pin — закрепить (Reply)\n"
+        "/unpin — открепить все\n"
+        "/ro — чат только чтение\n"
+        "/rw — открыть чат\n\n"
+        "💬 *ИИ:*\n"
+        "Упомяни @бот или ответь на моё сообщение"
     )
-    await update.message.reply_text(text, parse_mode="Markdown", quote=False)
+    await update.message.reply_text(text, parse_mode="Markdown")
 
-# ==================== ЗАПУСК ====================
+# ==================== HTTP-СЕРВЕР ДЛЯ RENDER ====================
 
 class DummyHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
-        self.send_header('Content-type', 'text/plain')
         self.end_headers()
         self.wfile.write(b"Alive")
 
-    # ДОБАВЛЕНО: Обработка проверок методом HEAD от Render
     def do_HEAD(self):
         self.send_response(200)
-        self.send_header('Content-type', 'text/plain')
         self.end_headers()
+
+    def log_message(self, format, *args):
+        pass  # Отключаем спам в логах
 
 def run_dummy_server():
     port = int(os.environ.get("PORT", 10000))
     server = HTTPServer(("0.0.0.0", port), DummyHandler)
     server.serve_forever()
 
+# ==================== ЗАПУСК ====================
+
 if __name__ == "__main__":
     threading.Thread(target=run_dummy_server, daemon=True).start()
+    print("🌐 HTTP-сервер запущен (для Render)")
 
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
