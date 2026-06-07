@@ -278,7 +278,7 @@ async def ai_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         response = ai_client.models.generate_content(
-            model="gemini-2.0-flash",
+            model="gemini-2.5-flash",
             contents=f"{SYSTEM}\n\nПользователь: {user_text}"
         )
         await update.message.reply_text(response.text)
