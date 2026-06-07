@@ -359,7 +359,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         response = ai_client.models.generate_content(
-            model="gemini-2.0-flash",
+            model="gemini-1.5-flash",
             contents=prompt
         )
         reply = response.text
@@ -368,7 +368,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(reply)
     except Exception as e:
         print(f"Ошибка ИИ: {e}")
-        await update.message.reply_text("⚙️ Модерэндер временно думает... попробуй позже.")
+        await update.message.reply_text("⚙️ ВАШ МОДЕРЭНДЕР ПОМЕР")
 
 # ==================== СТАРТ И ПОМОЩЬ ====================
 
@@ -386,12 +386,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
-        "🤖 *Модерэндер 3.0 — Команды:*\n\n"
-        "👑 *Только создатель чата:*\n"
+        "🤖 *Модерэндер 3.0*\n\n"
+        "*@enderdrakon5 *\n\n"
+        "*@TimurChubov *\n\n"
+        "👑 *ТОЛЬКО ЭНДЕРДРАКОН:*\n"
         "/addmod — назначить модератора (Reply)\n"
         "/removemod — снять модератора (Reply)\n"
         "/modlist — список модераторов\n\n"
-        "👮 *Модераторы и создатель:*\n"
+        "👮 *Команды для эндеровцев*\n"
         "/ban — бан навсегда (Reply)\n"
         "/kick — кик (Reply)\n"
         "/mute [мин] — мут, по умолч. 60 мин (Reply)\n"
@@ -402,10 +404,10 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/unpin — открепить все\n"
         "/ro — чат только чтение\n"
         "/rw — открыть чат\n\n"
-        "💬 *ИИ:*\n"
+        "💬 *С Модерэндером можно попиздеть*\n"
         "Упомяни @бот или ответь на моё сообщение\n"
         "🧠 Помню историю чата за 2 часа\n"
-        "😄 Ставлю реакции на сообщения (30% шанс)"
+        "😎 Ставлю реакции на сообщения "
     )
     await update.message.reply_text(text, parse_mode="Markdown")
 
