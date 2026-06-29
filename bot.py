@@ -23,7 +23,7 @@ ai_client = AsyncOpenAI(
 )
 
 # Модель
-AI_MODEL = "meta-llama/llama-4-scout:free"
+AI_MODEL = "google/gemma-4-26b-a4b-it:free"
 
 SYSTEM = """Роль: Эрудированный ИИ-ассистент Модерэндер 3.0 с характером (легкий цинизм и нейрохамство).
 
